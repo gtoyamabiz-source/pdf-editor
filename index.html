@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF簡易編集アプリ</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- pdf-lib -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <!-- PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- SortableJS -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+  <style>
+    /* ドロップエリアのアニメーション */
+    .drag-over {
+      border-color: #3b82f6 !important;
+      background-color: #eff6ff !important;
+    }
+    /* ドラッグ中のカードのスタイリング */
+    .sortable-ghost {
+      opacity: 0.4;
+      transform: scale(0.95);
+    }
+    .sortable-drag {
+      cursor: grabbing;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans">
+
+  <!-- ヘッダー -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
+      <div class="flex items-center space-x-2 sm:space-x-3 min-w-0 shrink">
+        <div class="bg-red-500 text-white p-1.5 sm:p-2 rounded-lg shadow shrink-0">
+          <i class="fa-solid font-bold fa-file-pdf text-lg sm:text-xl"></i>
+        </div>
+        <h1 class="text-base sm:text-xl font-bold text-slate-800 truncate">pdf簡易編集ツール</h1>
+      </div>
+      <div class="flex items-center space-x-1.5 sm:space-x-3 shrink-0">
+        <span class="text-[10px] sm:text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full border border-slate-200 shadow-sm">v10.02</span>
+        <button id="clearAllBtn" class="hidden text-slate-600 hover:text-red-600 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-medium rounded-md hover:bg-slate-100 transition whitespace-nowrap">
+          <i class="fa-solid fa-trash-can mr-1"></i> リセット
+        </button>
+        <button id="openExportModalBtn" disabled class="bg-red-600 hover:bg-red-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium px-3 sm:px-5 py-1.5 sm:py-2 text-xs sm:text-sm rounded-lg shadow-sm transition flex items-center space-x-1 sm:space-x-2 whitespace-nowrap">
+          <i class="fa-solid fa-download"></i>
+          <span>出力</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- メインコンテンツ -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col">
+
+    <!-- ツールバー (ファイル読み込み後表示) -->
+    <div id="toolbar" class="hidden mb-6 bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex-wrap gap-4 justify-between items-center">
+      <div class="flex items-center space-x-2 flex-wrap gap-y-2">
+        <label class="bg-blue-50 hover:bg-blue-100 text-blue-600 font-medium px-4 py-2 rounded-lg cursor-pointer transition text-sm flex items-center space-x-2 border border-blue-200">
+          <i class="fa-solid fa-plus"></i>
+          <span>ファイルを追加</span>
+          <input type="file" id="appendFileInput" multiple accept="application/pdf,image/*" class="hidden">
+        </label>
+        <div class="h-6 w-px bg-slate-200 mx-1 hidden sm:block"></div>
+        <button id="selectAllBtn" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg font-medium transition">
+          <i class="fa-regular fa-square-check mr-1"></i> 全選択
+        </button>
+
+        <button id="deselectAllBtn" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg font-medium transition">
+          <i class="fa-regular fa-square mr-1"></i> 選択解除
+        </button>
+        <button id="deleteSelectedBtn" disabled class="text-xs bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 disabled:opacity-50 disabled:cursor-not-allowed px-3 py-2 rounded-lg font-medium transition">
+          <i class="fa-solid fa-trash mr-1"></i> 選択したページを削除 (<span id="selectedCount">0</span>)
+        </button>
+      </div>
+
+      <div class="flex items-center space-x-3 text-slate-500 text-sm font-medium">
+        <span class="inline-flex items-center text-xs text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md border border-blue-100">
+          <i class="fa-solid fa-up-down-left-right mr-1.5"></i> ドラッグで並び替え可能
+        </span>
+        <span>全 <span id="totalPagesCount" class="text-slate-900 font-bold">0</span> ページ</span>
+      </div>
+    </div>
+
+    <!-- ドロップゾーン (空の場合) -->
+    <div id="dropZone" class="border-2 border-dashed border-slate-300 hover:border-blue-400 bg-white rounded-2xl p-6 sm:p-10 text-center cursor-pointer transition flex flex-col items-center justify-center flex-1 my-auto min-h-[360px] shadow-sm">
+      <input type="file" id="fileInput" multiple accept="application/pdf,image/*" class="hidden">
+      <div class="w-16 h-16 sm:w-20 sm:h-20 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center text-2xl sm:text-3xl mb-3 shadow-inner">
+        <i class="fa-solid fa-cloud-arrow-up"></i>
+      </div>
+      <h2 class="text-lg sm:text-xl font-bold text-slate-700 mb-2">ここにPDFや画像ファイルをドラッグ＆ドロップ</h2>
+      <p class="text-slate-500 text-xs sm:text-sm mb-4 max-w-md">
+        複数のPDF結合、ページの並び替え（ドラッグ操作）、削除、JPG/PNG画像のPDF変換、出力時のファイル軽量化に対応しています。
+      </p>
+      <button class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5 rounded-lg shadow transition text-sm mb-6">
+        ファイルを選択
+      </button>
+
+      <!-- コンパクトな安心・安全ローカル処理の図解表示 -->
+      <div class="w-full max-w-lg bg-emerald-50/80 border border-emerald-200/80 rounded-xl p-3 text-emerald-900 text-left">
+        <div class="flex items-center justify-between mb-1">
+          <span class="font-bold text-xs text-emerald-950 flex items-center gap-1.5">
+            <i class="fa-solid fa-shield-halved text-emerald-600"></i>
+            安心・安全の完全ローカル処理
+          </span>
+          <span class="bg-emerald-200/80 text-emerald-800 text-[10px] px-2 py-0.5 rounded-full font-bold">ネット送信ゼロ</span>
+        </div>
+        <p class="text-[11px] text-emerald-800 leading-tight mb-2">
+          選択したファイルがサーバーに送信・公開されることは一切ありません。すべての処理はお手元のブラウザ内だけで安全に行われます。
+        </p>
+
+        <!-- 超コンパクト仕組み図解 -->
+        <div class="flex items-center justify-around text-[10px] font-semibold text-emerald-800 bg-white/80 py-1.5 px-2 rounded-lg border border-emerald-100">
+          <span class="flex items-center gap-1"><i class="fa-solid fa-laptop text-emerald-600"></i> あなたのPC</span>
+          <i class="fa-solid fa-arrow-right text-emerald-400 text-[9px]"></i>
+          <span class="flex items-center gap-1"><i class="fa-solid fa-lock text-emerald-600"></i> ブラウザ内で編集</span>
+          <i class="fa-solid fa-arrow-right text-emerald-400 text-[9px]"></i>
+          <span class="flex items-center gap-1 text-rose-500"><i class="fa-solid fa-cloud-slash"></i> 外部送信なし</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ページカード表示エリア -->
+    <div id="pageGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+      <!-- ページカードがここに動的に追加されます -->
+    </div>
+
+  </main>
+
+  <!-- PDF出力設定 Modal -->
+  <div id="exportModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+      <div class="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+        <h3 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+          <i class="fa-solid fa-file-export text-red-500"></i>
+          PDFの出力設定
+        </h3>
+        <button id="closeExportModalBtn" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+          <i class="fa-solid fa-xmark text-xl"></i>
+        </button>
+      </div>
+
+      <div class="p-6 space-y-5">
+        <!-- ファイル名設定 -->
+        <div>
+          <label for="exportFileName" class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">出力ファイル名</label>
+          <div class="relative rounded-xl shadow-sm">
+            <input type="text" id="exportFileName" class="block w-full rounded-xl border-slate-300 border p-2.5 text-sm font-medium focus:border-red-500 focus:ring-red-500 pr-12 text-slate-800" placeholder="まとめpdf_yymmdd_MMSS">
+            <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+              <span class="text-slate-400 text-sm font-bold">.pdf</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">出力モード</label>
+          <div class="space-y-2">
+            <!-- 高品質 -->
+            <label class="flex items-start p-3 border rounded-xl cursor-pointer transition hover:bg-slate-50 border-slate-200" id="labelQualityOriginal">
+              <input type="radio" name="compressPreset" value="original" checked class="mt-1 text-red-600 focus:ring-red-500">
+              <div class="ml-3">
+                <div class="text-sm font-bold text-slate-800">高品質 (画質優先)</div>
+                <div class="text-xs text-slate-500">元のPDF/画像の解像度を維持します（ファイルサイズ非削減）。</div>
+              </div>
+            </label>
+
+            <!-- バランス軽量化 -->
+            <label class="flex items-start p-3 border rounded-xl cursor-pointer transition hover:bg-slate-50 border-slate-200" id="labelQualityBalanced">
+              <input type="radio" name="compressPreset" value="balanced" class="mt-1 text-red-600 focus:ring-red-500">
+              <div class="ml-3">
+                <div class="text-sm font-bold text-slate-800">バランス軽量化 <span class="text-xs bg-green-100 text-green-700 font-semibold px-2 py-0.5 rounded ml-1">おすすめ</span></div>
+                <div class="text-xs text-slate-500">目視の画質を保ちつつ、画像・ページを圧縮（JPEG 75%）。</div>
+              </div>
+            </label>
+
+            <!-- 最大軽量化 -->
+            <label class="flex items-start p-3 border rounded-xl cursor-pointer transition hover:bg-slate-50 border-slate-200" id="labelQualityCompact">
+              <input type="radio" name="compressPreset" value="compact" class="mt-1 text-red-600 focus:ring-red-500">
+              <div class="ml-3">
+                <div class="text-sm font-bold text-slate-800">最大軽量化 (サイズ削減優先)</div>
+                <div class="text-xs text-slate-500">解像度を落とし大幅圧縮（解像度70%, JPEG 50%）。メール送信等に。</div>
+              </div>
+            </label>
+
+            <!-- カスタム -->
+            <label class="flex items-start p-3 border rounded-xl cursor-pointer transition hover:bg-slate-50 border-slate-200" id="labelQualityCustom">
+              <input type="radio" name="compressPreset" value="custom" class="mt-1 text-red-600 focus:ring-red-500">
+              <div class="ml-3 flex-1">
+                <div class="text-sm font-bold text-slate-800">カスタム調整</div>
+                <div class="text-xs text-slate-500">解像度と画質を手動で指定します。</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- カスタム設定スライダー (非表示/表示) -->
+        <div id="customSettingsArea" class="hidden p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-4 text-sm">
+          <div>
+            <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+              <span>解像度倍率</span>
+              <span id="scaleValueText">100%</span>
+            </div>
+            <input type="range" id="scaleSlider" min="0.5" max="1.5" step="0.1" value="1.0" class="w-full accent-red-600">
+          </div>
+          <div>
+            <div class="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+              <span>JPEG圧縮品質</span>
+              <span id="qualityValueText">75%</span>
+            </div>
+            <input type="range" id="qualitySlider" min="0.1" max="1.0" step="0.05" value="0.75" class="w-full accent-red-600">
+          </div>
+        </div>
+      </div>
+
+      <div class="p-4 bg-slate-50 border-t border-slate-100 flex justify-end space-x-3">
+        <button id="cancelExportBtn" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition">
+          キャンセル
+        </button>
+        <button id="startExportBtn" class="px-5 py-2 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg shadow-sm transition flex items-center gap-2">
+          <i class="fa-solid fa-download"></i>
+          <span>ダウンロード開始</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ローディングオーバーレイ -->
+  <div id="loadingOverlay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex flex-col items-center justify-center text-white hidden">
+    <div class="bg-white text-slate-800 p-6 rounded-2xl shadow-xl flex flex-col items-center max-w-xs w-full">
+      <div class="inline-block w-12 h-12 border-4 border-red-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+      <p id="loadingMessage" class="font-bold text-slate-700 text-center mb-1">ファイルを処理中...</p>
+      <p id="loadingSubMessage" class="text-xs text-slate-500 text-center">しばらくお待ちください</p>
+    </div>
+  </div>
+
+  <!-- 画像拡大プレビュー Modal -->
+  <div id="previewModal" class="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4 hidden">
+    <div class="relative bg-white rounded-xl shadow-2xl max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+      <div class="p-3 border-b flex justify-between items-center bg-slate-50">
+        <span id="previewTitle" class="text-sm font-medium text-slate-700 truncate"></span>
+        <button id="closePreviewBtn" class="text-slate-500 hover:text-slate-800 p-1 rounded">
+          <i class="fa-solid fa-xmark text-xl"></i>
+        </button>
+      </div>
+      <div class="p-4 flex-1 overflow-auto flex items-center justify-center bg-slate-200">
+        <img id="previewImage" src="" alt="拡大プレビュー" class="max-h-[75vh] object-contain shadow-md rounded">
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // PDF.js Worker設定
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    // State 管理
+    let pagesList = []; // { id, type: 'pdf'|'image', pdfBytes, pageNum, imageBytes, mimeType, rotation, title, selected }
+    let sortableInstance = null;
+
+    // DOM要素
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const appendFileInput = document.getElementById('appendFileInput');
+    const pageGrid = document.getElementById('pageGrid');
+    const toolbar = document.getElementById('toolbar');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+    const openExportModalBtn = document.getElementById('openExportModalBtn');
+    const selectAllBtn = document.getElementById('selectAllBtn');
+    const deselectAllBtn = document.getElementById('deselectAllBtn');
+    const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+    const selectedCountSpan = document.getElementById('selectedCount');
+    const totalPagesCountSpan = document.getElementById('totalPagesCount');
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    const loadingMessage = document.getElementById('loadingMessage');
+    const previewModal = document.getElementById('previewModal');
+    const previewImage = document.getElementById('previewImage');
+    const previewTitle = document.getElementById('previewTitle');
+    const closePreviewBtn = document.getElementById('closePreviewBtn');
+
+    // モーダル関連要素
+    const exportModal = document.getElementById('exportModal');
+    const exportFileNameInput = document.getElementById('exportFileName');
+    const closeExportModalBtn = document.getElementById('closeExportModalBtn');
+    const cancelExportBtn = document.getElementById('cancelExportBtn');
+    const startExportBtn = document.getElementById('startExportBtn');
+    const customSettingsArea = document.getElementById('customSettingsArea');
+    const scaleSlider = document.getElementById('scaleSlider');
+    const qualitySlider = document.getElementById('qualitySlider');
+    const scaleValueText = document.getElementById('scaleValueText');
+    const qualityValueText = document.getElementById('qualityValueText');
+
+    // 初期化
+    initSortable();
+    initEventListeners();
+
+    // デフォルトファイル名生成 (まとめpdf_yymmdd_MMSS.pdf)
+    function generateDefaultFileName() {
+      const now = new Date();
+      const yy = String(now.getFullYear()).slice(-2);
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const HH = String(now.getHours()).padStart(2, '0');
+      const MM = String(now.getMinutes()).padStart(2, '0');
+      return `まとめpdf_${yy}${mm}${dd}_${HH}${MM}`;
+    }
+
+    function initSortable() {
+      sortableInstance = new Sortable(pageGrid, {
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        dragClass: 'sortable-drag',
+        onEnd: function () {
+          const cardElements = Array.from(pageGrid.children);
+          const newPagesList = [];
+          cardElements.forEach(card => {
+            const id = card.dataset.id;
+            const item = pagesList.find(p => p.id === id);
+            if (item) newPagesList.push(item);
+          });
+          pagesList = newPagesList;
+          updatePageNumbersUI();
+        }
+      });
+    }
+
+    function initEventListeners() {
+      dropZone.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', handleFileSelect);
+      appendFileInput.addEventListener('change', handleFileSelect);
+
+      ['dragenter', 'dragover'].forEach(eventName => {
+        document.body.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.add('drag-over');
+        }, false);
+      });
+
+      ['dragleave', 'drop'].forEach(eventName => {
+        document.body.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZone.classList.remove('drag-over');
+        }, false);
+      });
+
+      document.body.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          processFiles(files);
+        }
+      });
+
+      clearAllBtn.addEventListener('click', clearAll);
+      selectAllBtn.addEventListener('click', () => setAllSelection(true));
+      deselectAllBtn.addEventListener('click', () => setAllSelection(false));
+      deleteSelectedBtn.addEventListener('click', deleteSelectedPages);
+      
+      // 出力モーダル
+      openExportModalBtn.addEventListener('click', () => {
+        exportFileNameInput.value = generateDefaultFileName();
+        exportModal.classList.remove('hidden');
+      });
+      closeExportModalBtn.addEventListener('click', () => exportModal.classList.add('hidden'));
+      cancelExportBtn.addEventListener('click', () => exportModal.classList.add('hidden'));
+      startExportBtn.addEventListener('click', () => {
+        exportModal.classList.add('hidden');
+        generateAndDownloadPDF();
+      });
+
+      closePreviewBtn.addEventListener('click', () => previewModal.classList.add('hidden'));
+
+      // プリセットラジオボタン変更時
+      document.querySelectorAll('input[name="compressPreset"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          if (e.target.value === 'custom') {
+            customSettingsArea.classList.remove('hidden');
+          } else {
+            customSettingsArea.classList.add('hidden');
+          }
+        });
+      });
+
+      // スライダー表示更新
+      scaleSlider.addEventListener('input', (e) => {
+        scaleValueText.textContent = `${Math.round(e.target.value * 100)}%`;
+      });
+      qualitySlider.addEventListener('input', (e) => {
+        qualityValueText.textContent = `${Math.round(e.target.value * 100)}%`;
+      });
+    }
+
+    async function handleFileSelect(e) {
+      const files = e.target.files;
+      if (files && files.length > 0) {
+        await processFiles(files);
+        e.target.value = '';
+      }
+    }
+
+    async function processFiles(files) {
+      showLoading('ファイルを読み込み中...', 'サムネイルを生成しています');
+      try {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (file.type === 'application/pdf') {
+            await loadPdfFile(file);
+          } else if (file.type.startsWith('image/')) {
+            await loadImageFile(file);
+          }
+        }
+        renderPageCards();
+        updateUIState();
+      } catch (err) {
+        console.error(err);
+        alert('ファイルの読み込み中にエラーが発生しました: ' + err.message);
+      } finally {
+        hideLoading();
+      }
+    }
+
+    async function loadPdfFile(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdfBytes = new Uint8Array(arrayBuffer);
+
+      const pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
+      const numPages = pdfDoc.numPages;
+
+      for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+        const page = await pdfDoc.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 0.4 });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        await page.render({ canvasContext: context, viewport: viewport }).promise;
+        const thumbnailUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+        pagesList.push({
+          id: 'page_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+          type: 'pdf',
+          pdfBytes: pdfBytes,
+          pageNum: pageNum,
+          thumbnailUrl: thumbnailUrl,
+          rotation: 0,
+          title: `${file.name} (P.${pageNum})`,
+          selected: false
+        });
+      }
+    }
+
+    async function loadImageFile(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const thumbnailUrl = e.target.result;
+          pagesList.push({
+            id: 'page_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+            type: 'image',
+            imageBytes: bytes,
+            mimeType: file.type,
+            thumbnailUrl: thumbnailUrl,
+            rotation: 0,
+            title: file.name,
+            selected: false
+          });
+          resolve();
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function renderPageCards() {
+      pageGrid.innerHTML = '';
+
+      pagesList.forEach((page, index) => {
+        const card = document.createElement('div');
+        card.className = `group relative bg-white border border-slate-200 rounded-xl p-2 shadow-sm hover:shadow-md transition flex flex-col items-center select-none ${page.selected ? 'ring-2 ring-blue-500 bg-blue-50/30' : ''}`;
+        card.dataset.id = page.id;
+
+        card.innerHTML = `
+          <div class="absolute top-3 left-3 z-10">
+            <input type="checkbox" ${page.selected ? 'checked' : ''} class="page-checkbox w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer">
+          </div>
+
+          <div class="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity flex space-x-1 bg-white/90 backdrop-blur-sm p-1 rounded-lg shadow-sm border border-slate-200">
+            <button class="rotate-btn text-slate-600 hover:text-blue-600 p-1 rounded hover:bg-slate-100" title="時計回りに回転">
+              <i class="fa-solid fa-rotate-right text-xs"></i>
+            </button>
+            <button class="preview-btn text-slate-600 hover:text-blue-600 p-1 rounded hover:bg-slate-100" title="拡大プレビュー">
+              <i class="fa-solid fa-magnifying-glass text-xs"></i>
+            </button>
+            <button class="delete-btn text-slate-600 hover:text-red-600 p-1 rounded hover:bg-slate-100" title="削除">
+              <i class="fa-solid fa-xmark text-xs"></i>
+            </button>
+          </div>
+
+          <div class="w-full h-44 flex items-center justify-center overflow-hidden bg-slate-100 rounded-lg p-2 relative cursor-grab">
+            <img src="${page.thumbnailUrl}" class="max-h-full max-w-full object-contain shadow-sm transition-transform duration-200" style="transform: rotate(${page.rotation}deg);" alt="${page.title}">
+          </div>
+
+          <div class="w-full mt-2 flex items-center justify-between text-xs text-slate-500 px-1">
+            <span class="page-number font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">${index + 1}</span>
+            <span class="truncate max-w-[100px]" title="${page.title}">${page.title}</span>
+          </div>
+        `;
+
+        const checkbox = card.querySelector('.page-checkbox');
+        checkbox.addEventListener('change', (e) => {
+          page.selected = e.target.checked;
+          if (page.selected) {
+            card.classList.add('ring-2', 'ring-blue-500', 'bg-blue-50/30');
+          } else {
+            card.classList.remove('ring-2', 'ring-blue-500', 'bg-blue-50/30');
+          }
+          updateSelectedCount();
+        });
+
+        card.querySelector('.rotate-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          page.rotation = (page.rotation + 90) % 360;
+          card.querySelector('img').style.transform = `rotate(${page.rotation}deg)`;
+        });
+
+        card.querySelector('.delete-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          deletePage(page.id);
+        });
+
+        card.querySelector('.preview-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          previewImage.src = page.thumbnailUrl;
+          previewImage.style.transform = `rotate(${page.rotation}deg)`;
+          previewTitle.textContent = page.title;
+          previewModal.classList.remove('hidden');
+        });
+
+        pageGrid.appendChild(card);
+      });
+    }
+
+    function deletePage(id) {
+      pagesList = pagesList.filter(p => p.id !== id);
+      renderPageCards();
+      updateUIState();
+    }
+
+    function deleteSelectedPages() {
+      pagesList = pagesList.filter(p => !p.selected);
+      renderPageCards();
+      updateUIState();
+    }
+
+    function setAllSelection(selected) {
+      pagesList.forEach(p => p.selected = selected);
+      renderPageCards();
+      updateSelectedCount();
+    }
+
+    function clearAll() {
+      if (pagesList.length === 0) return;
+      if (confirm('すべてのページを消去しますか？')) {
+        pagesList = [];
+        renderPageCards();
+        updateUIState();
+      }
+    }
+
+    function updateUIState() {
+      const hasPages = pagesList.length > 0;
+      dropZone.classList.toggle('hidden', hasPages);
+      toolbar.classList.toggle('hidden', !hasPages);
+      clearAllBtn.classList.toggle('hidden', !hasPages);
+      openExportModalBtn.disabled = !hasPages;
+
+      totalPagesCountSpan.textContent = pagesList.length;
+      updateSelectedCount();
+      updatePageNumbersUI();
+    }
+
+    function updateSelectedCount() {
+      const count = pagesList.filter(p => p.selected).length;
+      selectedCountSpan.textContent = count;
+      deleteSelectedBtn.disabled = count === 0;
+    }
+
+    function updatePageNumbersUI() {
+      const cards = pageGrid.querySelectorAll('[data-id]');
+      cards.forEach((card, idx) => {
+        const numSpan = card.querySelector('.page-number');
+        if (numSpan) numSpan.textContent = idx + 1;
+      });
+    }
+
+    // --- PDF生成・軽量化ロジック ---
+    async function generateAndDownloadPDF() {
+      if (pagesList.length === 0) return;
+
+      const preset = document.querySelector('input[name="compressPreset"]:checked').value;
+      let scale = 1.0;
+      let quality = 0.8;
+      let isCompress = false;
+
+      if (preset === 'balanced') {
+        scale = 1.2; // 読みやすさを確保しつつ圧縮
+        quality = 0.75;
+        isCompress = true;
+      } else if (preset === 'compact') {
+        scale = 0.8;
+        quality = 0.50;
+        isCompress = true;
+      } else if (preset === 'custom') {
+        scale = parseFloat(scaleSlider.value);
+        quality = parseFloat(qualitySlider.value);
+        isCompress = true;
+      }
+
+      showLoading('PDFを生成中...', isCompress ? '画質圧縮と最適化を行っています' : 'ページを結合しています');
+
+      try {
+        const { PDFDocument, degrees } = PDFLib;
+        const newPdfDoc = await PDFDocument.create();
+        const pdfDocCache = new Map();
+
+        for (let i = 0; i < pagesList.length; i++) {
+          const item = pagesList[i];
+          showLoading('PDFを生成中...', `${i + 1} / ${pagesList.length} ページ目を処理中`);
+
+          if (!isCompress && item.type === 'pdf') {
+            // 軽量化なし：直接ベクトルデータとして結合
+            let srcDoc = pdfDocCache.get(item.pdfBytes);
+            if (!srcDoc) {
+              srcDoc = await PDFDocument.load(item.pdfBytes);
+              pdfDocCache.set(item.pdfBytes, srcDoc);
+            }
+            const [copiedPage] = await newPdfDoc.copyPages(srcDoc, [item.pageNum - 1]);
+            if (item.rotation !== 0) {
+              const currentRotation = copiedPage.getRotation().angle;
+              copiedPage.setRotation(degrees((currentRotation + item.rotation) % 360));
+            }
+            newPdfDoc.addPage(copiedPage);
+
+          } else {
+            // 軽量化有効、または画像ファイルの場合：Canvas再レンダリング圧縮
+            let jpegBytes;
+            let imgWidth, imgHeight;
+
+            if (item.type === 'pdf') {
+              // PDFページを画像としてレンダリングして圧縮
+              const pdfDoc = await pdfjsLib.getDocument({ data: item.pdfBytes.buffer.slice(0) }).promise;
+              const page = await pdfDoc.getPage(item.pageNum);
+              const viewport = page.getViewport({ scale: scale * 1.5 });
+
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              canvas.width = viewport.width;
+              canvas.height = viewport.height;
+
+              await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+
+              const dataUrl = canvas.toDataURL('image/jpeg', quality);
+              jpegBytes = dataUrlToUint8Array(dataUrl);
+              imgWidth = viewport.width / (scale * 1.5);
+              imgHeight = viewport.height / (scale * 1.5);
+
+            } else if (item.type === 'image') {
+              // 画像を圧縮・リサイズ
+              const res = await compressImageBytes(item.thumbnailUrl, scale, quality);
+              jpegBytes = res.bytes;
+              imgWidth = res.width;
+              imgHeight = res.height;
+            }
+
+            const embeddedImage = await newPdfDoc.embedJpg(jpegBytes);
+            const page = newPdfDoc.addPage([imgWidth, imgHeight]);
+            
+            page.drawImage(embeddedImage, {
+              x: 0,
+              y: 0,
+              width: imgWidth,
+              height: imgHeight,
+            });
+
+            if (item.rotation !== 0) {
+              page.setRotation(degrees(item.rotation));
+            }
+          }
+        }
+
+        const pdfResultBytes = await newPdfDoc.save();
+        const blob = new Blob([pdfResultBytes], { type: 'application/pdf' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+
+        // 指定されたファイル名を取得（未入力時はデフォルトを適用）
+        let fileName = exportFileNameInput.value.trim();
+        if (!fileName) {
+          fileName = generateDefaultFileName();
+        }
+        if (!fileName.toLowerCase().endsWith('.pdf')) {
+          fileName += '.pdf';
+        }
+
+        link.download = fileName;
+        link.click();
+        URL.revokeObjectURL(link.href);
+
+      } catch (error) {
+        console.error(error);
+        alert('PDF生成中にエラーが発生しました: ' + error.message);
+      } finally {
+        hideLoading();
+      }
+    }
+
+    // DataURL -> Uint8Array 変換
+    function dataUrlToUint8Array(dataUrl) {
+      const base64 = dataUrl.split(',')[1];
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    // 画像再圧縮処理
+    function compressImageBytes(dataUrl, scale, quality) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const targetWidth = img.width * scale;
+          const targetHeight = img.height * scale;
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
+
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+          resolve({
+            bytes: dataUrlToUint8Array(compressedDataUrl),
+            width: targetWidth / scale,
+            height: targetHeight / scale
+          });
+        };
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+    }
+
+    // ローディングヘルパー
+    function showLoading(msg, subMsg = '') {
+      loadingMessage.textContent = msg;
+      document.getElementById('loadingSubMessage').textContent = subMsg;
+      loadingOverlay.classList.remove('hidden');
+    }
+
+    function hideLoading() {
+      loadingOverlay.classList.add('hidden');
+    }
+  </script>
+</body>
+</html>

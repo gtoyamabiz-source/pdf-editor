@@ -1,0 +1,1562 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF簡易編集アプリ</title>
+    
+    <!-- Tailwind CSS (スタイリング用) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- PDF.js (PDFのプレビュー描画用) -->
+    <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+    
+    <!-- pdf-lib (PDFの編集・結合・書き出し用) -->
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    
+    <!-- SortableJS (ドラッグ＆ドロップでの並び替え用) -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    
+    <!-- Lucide Icons (アイコン用) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
+        }
+        /* カスタムスクロールバー (ライトモード向け) */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+        /* ドラッグ中のプレビューのスタイル */
+        .sortable-ghost {
+            opacity: 0.4;
+            background-color: #e0e7ff;
+            border: 2px dashed #6366f1;
+        }
+        /* キャンバス上のカーソル制御 */
+        .cursor-pen { cursor: crosshair; }
+        .cursor-text-tool { cursor: text; }
+        .cursor-eraser { cursor: cell; }
+        
+        /* アニメーション */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.98); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.2s ease-out forwards;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden bg-slate-50 text-slate-800">
+
+    <!-- ヘッダー -->
+    <header class="bg-white border-b border-slate-200 shadow-sm z-10 p-4 flex flex-wrap justify-between items-center gap-4">
+        <div class="flex items-center gap-3">
+            <div class="p-2.5 bg-indigo-600 rounded-xl shadow-sm text-white">
+                <i data-lucide="file-text" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold text-slate-900 tracking-wide flex items-center gap-2">
+                    PDF簡易編集＆注釈ツール
+                    <span class="text-xs font-semibold px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full border border-indigo-200">v11.16</span>
+                </h1>
+                <p class="text-xs text-slate-500">結合・抽出・並び替え・画像変換・注釈追加</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-2 sm:gap-3">
+            <button id="clear-all-btn" class="text-xs font-medium px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition border border-slate-300 flex items-center gap-1.5 whitespace-nowrap shrink-0">
+                <i data-lucide="trash-2" class="w-4 h-4 text-slate-500 shrink-0"></i>
+                <span>すべてクリア</span>
+            </button>
+            <button id="export-btn" class="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold py-2 px-3.5 sm:px-5 text-xs sm:text-sm rounded-lg shadow-sm flex items-center gap-1.5 sm:gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap shrink-0">
+                <i data-lucide="download" class="w-4 h-4 shrink-0"></i>
+                <span>PDFとして保存</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- メインコンテンツ -->
+    <main class="flex-1 flex flex-col overflow-hidden relative p-4 gap-4">
+        
+        <!-- ドロップゾーン (ファイル追加時に自動的にコンパクト化) -->
+        <div id="drop-zone" class="p-5 sm:p-6 border-2 border-dashed border-slate-300 hover:border-indigo-500 rounded-xl bg-white hover:bg-indigo-50/40 transition-all duration-200 cursor-pointer flex flex-col items-center justify-center flex-shrink-0 group shadow-sm">
+            <div id="drop-zone-large" class="flex flex-col items-center justify-center">
+                <div class="p-2.5 sm:p-3 bg-indigo-50 group-hover:bg-indigo-100 rounded-full transition-colors mb-2">
+                    <i data-lucide="upload-cloud" class="w-7 h-7 sm:w-8 sm:h-8 text-indigo-600"></i>
+                </div>
+                <p class="text-slate-800 font-semibold text-center text-sm sm:text-base">PDFや画像(JPG/PNG)を選択・ドロップ</p>
+                <p class="text-xs text-slate-500 mt-1 text-center">タップまたはドラッグ＆ドロップでファイルを追加できます</p>
+            </div>
+            <div id="drop-zone-compact" class="hidden items-center gap-2 text-indigo-600 font-semibold text-xs sm:text-sm py-0.5">
+                <i data-lucide="plus-circle" class="w-4 h-4 sm:w-5 sm:h-5"></i>
+                <span>ファイルを追加（タップまたはここにドロップ）</span>
+            </div>
+            <input type="file" id="file-input" class="hidden" multiple accept=".pdf, image/jpeg, image/png, image/jpg">
+        </div>
+
+        <!-- ワークスペース (ページ一覧) -->
+        <div class="flex-1 overflow-y-auto p-4 bg-slate-100/70 rounded-xl border border-slate-200">
+            <div id="empty-state" class="h-full flex flex-col items-center justify-center text-slate-400 py-12">
+                <i data-lucide="layers" class="w-16 h-16 mb-4 opacity-40 text-slate-400"></i>
+                <p class="text-lg font-semibold text-slate-600">ファイルが読み込まれていません</p>
+                <p class="text-sm mt-1 text-slate-400">PDFや画像をアップロードするとページの一覧が表示されます。</p>
+            </div>
+            
+            <!-- ページが並ぶグリッド -->
+            <div id="pages-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                <!-- JavaScriptで動的にカードが追加されます -->
+            </div>
+        </div>
+    </main>
+
+    <!-- 注釈・編集モーダル -->
+    <div id="annotation-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 hidden flex-col animate-fade-in p-2 sm:p-4">
+        
+        <!-- モーダルヘッダー / ツールバー -->
+        <div class="bg-white border border-slate-200 rounded-t-xl p-3 flex flex-wrap items-center justify-between gap-3 flex-shrink-0 shadow-sm">
+            
+            <div class="flex items-center gap-2">
+                <span class="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                    <i data-lucide="edit-3" class="w-4 h-4 text-indigo-600"></i>
+                    注釈モード
+                </span>
+                <span id="modal-page-info" class="text-xs font-semibold bg-slate-100 text-slate-700 px-2 py-1 rounded border border-slate-200">Page 1</span>
+            </div>
+
+            <!-- 描画ツールグループ -->
+            <div class="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200 gap-1 flex-wrap">
+                <button title="移動・選択 (Wクリックでテキスト再編集)" data-tool="select" class="tool-btn active p-2 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="mouse-pointer" class="w-4 h-4"></i>
+                </button>
+                <button title="ペン (自由描画)" data-tool="pen" class="tool-btn p-2 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="pen-tool" class="w-4 h-4"></i>
+                </button>
+                <button title="蛍光ペン" data-tool="highlighter" class="tool-btn p-2 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="highlighter" class="w-4 h-4"></i>
+                </button>
+                <button title="テキスト入力" data-tool="text" class="tool-btn p-2 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="type" class="w-4 h-4"></i>
+                </button>
+                <button title="四角形" data-tool="rect" class="tool-btn p-2 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="square" class="w-4 h-4"></i>
+                </button>
+                <button title="円 / 楕円" data-tool="circle" class="tool-btn p-2 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="circle" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <!-- 描画設定 (カラー＆サイズ) -->
+            <div class="flex items-center gap-3 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+                <div class="flex items-center gap-1.5" title="カラー選択">
+                    <span class="text-xs font-medium text-slate-600">色:</span>
+                    <input type="color" id="tool-color" value="#ef4444" class="w-6 h-6 bg-transparent border-0 rounded cursor-pointer">
+                </div>
+                <div class="flex items-center gap-1.5" title="線の太さ / 文字サイズ">
+                    <span class="text-xs font-medium text-slate-600">サイズ:</span>
+                    <input type="range" id="tool-size" min="2" max="40" value="4" class="w-20 accent-indigo-600">
+                    <span id="size-display" class="text-xs font-semibold text-slate-700 w-4">4</span>
+                </div>
+            </div>
+
+            <!-- ズーム＆回転コントロール -->
+            <div class="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200 gap-1">
+                <button id="zoom-out-btn" title="縮小" class="p-1.5 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="zoom-out" class="w-4 h-4"></i>
+                </button>
+                <span id="zoom-percent" class="text-xs font-mono font-semibold text-slate-700 px-1 min-w-[3.5rem] text-center">Fit</span>
+                <button id="zoom-in-btn" title="拡大" class="p-1.5 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="zoom-in" class="w-4 h-4"></i>
+                </button>
+                <button id="zoom-fit-btn" title="画面に合わせる" class="p-1 text-xs font-medium bg-white hover:bg-slate-200 text-slate-700 rounded transition border border-slate-200">
+                    Fit
+                </button>
+                <div class="h-4 w-px bg-slate-300 mx-1"></div>
+                <button id="rotate-left-btn" title="左90度回転" class="p-1.5 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                </button>
+                <button id="rotate-right-btn" title="右90度回転" class="p-1.5 rounded hover:bg-slate-200 text-slate-700 transition">
+                    <i data-lucide="rotate-cw" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <!-- アクション操作 -->
+            <div class="flex items-center gap-2">
+                <button id="delete-selected-btn" title="選択したオブジェクトを削除" class="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg border border-amber-200 transition flex items-center gap-1 text-xs font-medium">
+                    <i data-lucide="minus-circle" class="w-4 h-4"></i> 選択削除
+                </button>
+                <button id="undo-annotation-btn" title="元に戻す" class="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg border border-slate-200 transition flex items-center gap-1 text-xs font-medium">
+                    <i data-lucide="undo" class="w-4 h-4"></i>
+                </button>
+                <button id="clear-annotation-btn" title="注釈を全消去" class="p-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg border border-rose-200 transition flex items-center gap-1 text-xs font-medium">
+                    <i data-lucide="trash" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- ワークスペース -->
+        <div id="annotation-scroll-container" class="flex-1 bg-slate-200/80 border-x border-slate-200 overflow-auto p-8 relative flex min-h-0 select-none">
+            <div id="canvas-wrapper-container" class="m-auto relative flex items-center justify-center flex-shrink-0">
+                <div id="canvas-wrapper" class="relative shadow-xl transition-all duration-150 bg-white rounded">
+                    <canvas id="modal-base-canvas" class="w-full h-full block rounded"></canvas>
+                    <canvas id="modal-draw-canvas" class="absolute top-0 left-0 w-full h-full rounded cursor-pen"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- モーダル フッター -->
+        <div class="bg-white border border-slate-200 rounded-b-xl p-3 flex justify-between items-center flex-shrink-0 shadow-sm">
+            <div class="text-xs text-slate-500 flex items-center gap-2">
+                <i data-lucide="info" class="w-4 h-4 text-indigo-600"></i>
+                「選択」ツールで図形や文字を選択して移動・拡大縮小・ダブルクリックでテキスト再編集が可能です。
+            </div>
+            <div class="flex items-center gap-3">
+                <button id="modal-cancel-btn" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-sm font-medium transition">
+                    キャンセル
+                </button>
+                <button id="modal-save-btn" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-sm transition flex items-center gap-1.5">
+                    <i data-lucide="check" class="w-4 h-4"></i>
+                    注釈を保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ローディング表示 -->
+    <div id="loading-overlay" class="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-50 hidden flex-col items-center justify-center text-slate-800">
+        <div class="p-6 bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col items-center max-w-xs text-center">
+            <i data-lucide="loader-2" class="w-10 h-10 animate-spin text-indigo-600 mb-3"></i>
+            <p id="loading-text" class="text-sm font-semibold text-slate-800">処理中...</p>
+        </div>
+    </div>
+
+    <!-- エクスポート設定モーダル -->
+    <div id="export-modal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 hidden items-center justify-center animate-fade-in p-3 sm:p-4">
+        <div class="bg-white border border-slate-200 rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden">
+            <div class="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
+                <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                    <i data-lucide="download" class="w-4 h-4 text-indigo-600"></i>
+                    PDFエクスポート設定
+                </h3>
+                <button id="export-modal-close" class="text-slate-400 hover:text-slate-600 transition p-1 rounded-lg">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            
+            <div class="p-4 sm:p-5 space-y-4 overflow-y-auto">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 mb-1">出力ファイル名</label>
+                    <div class="flex items-center gap-2">
+                        <input type="text" id="export-filename" class="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-xs font-mono focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500">
+                        <span class="text-xs font-mono text-slate-500 font-semibold">.pdf</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 mb-1.5">圧縮率・画質設定</label>
+                    <div class="grid grid-cols-3 gap-2">
+                        <label class="cursor-pointer border border-slate-200 rounded-xl p-2 sm:p-2.5 text-center hover:border-indigo-400 transition has-[:checked]:border-indigo-600 has-[:checked]:bg-indigo-50/60">
+                            <input type="radio" name="export-quality" value="high" class="sr-only" checked>
+                            <span class="block text-xs font-bold text-slate-800">高品質</span>
+                            <span class="block text-[10px] text-slate-500 mt-0.5">100% (最高画質)</span>
+                        </label>
+                        <label class="cursor-pointer border border-slate-200 rounded-xl p-2 sm:p-2.5 text-center hover:border-indigo-400 transition has-[:checked]:border-indigo-600 has-[:checked]:bg-indigo-50/60">
+                            <input type="radio" name="export-quality" value="medium" class="sr-only">
+                            <span class="block text-xs font-bold text-slate-800">標準</span>
+                            <span class="block text-[10px] text-slate-500 mt-0.5">75% (推奨)</span>
+                        </label>
+                        <label class="cursor-pointer border border-slate-200 rounded-xl p-2 sm:p-2.5 text-center hover:border-indigo-400 transition has-[:checked]:border-indigo-600 has-[:checked]:bg-indigo-50/60">
+                            <input type="radio" name="export-quality" value="low" class="sr-only">
+                            <span class="block text-xs font-bold text-slate-800">ドラフト</span>
+                            <span class="block text-[10px] text-slate-500 mt-0.5">50% (軽量)</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-3 border-t border-slate-200 bg-slate-50 flex justify-end gap-2 shrink-0">
+                <button id="export-cancel-btn" class="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-lg text-xs font-medium transition">
+                    キャンセル
+                </button>
+                <button id="export-confirm-btn" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-sm transition flex items-center gap-1.5">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    PDFを出力
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- トースト通知 -->
+    <div id="toast-container" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+
+        const CMAP_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/';
+        const STANDARD_FONT_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/';
+
+        let pageItems = [];
+        let fileCache = {};
+        let currentTool = 'pen';
+        
+        let currentModalItem = null;
+        let currentModalImage = null;
+        let currentScale = 1.0;
+        let isFitMode = true;
+        let currentRotation = 0;
+        
+        let annotationsList = [];
+        let selectedAnnotationId = null;
+        let isInteracting = false;
+        let interactionType = null;
+        
+        let startCoords = { x: 0, y: 0 };
+        let activeAnnotation = null;
+        let dragOffset = { x: 0, y: 0 };
+        let initialObjectState = null;
+        let annotationHistory = [];
+        
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const pagesGrid = document.getElementById('pages-grid');
+        const emptyState = document.getElementById('empty-state');
+        const exportBtn = document.getElementById('export-btn');
+        const clearAllBtn = document.getElementById('clear-all-btn');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+
+        const annotationModal = document.getElementById('annotation-modal');
+        const scrollContainer = document.getElementById('annotation-scroll-container');
+        const canvasWrapperContainer = document.getElementById('canvas-wrapper-container');
+        const canvasWrapper = document.getElementById('canvas-wrapper');
+        const baseCanvas = document.getElementById('modal-base-canvas');
+        const drawCanvas = document.getElementById('modal-draw-canvas');
+        const baseCtx = baseCanvas.getContext('2d');
+        const drawCtx = drawCanvas.getContext('2d');
+
+        const exportModal = document.getElementById('export-modal');
+        const exportFilenameInput = document.getElementById('export-filename');
+        const exportModalClose = document.getElementById('export-modal-close');
+        const exportCancelBtn = document.getElementById('export-cancel-btn');
+        const exportConfirmBtn = document.getElementById('export-confirm-btn');
+
+        const toolColorInput = document.getElementById('tool-color');
+        const toolSizeInput = document.getElementById('tool-size');
+        const sizeDisplay = document.getElementById('size-display');
+        const zoomPercent = document.getElementById('zoom-percent');
+
+        lucide.createIcons();
+
+        new Sortable(pagesGrid, {
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            onEnd: function (evt) {
+                const item = pageItems.splice(evt.oldIndex, 1)[0];
+                pageItems.splice(evt.newIndex, 0, item);
+                updatePageNumbers();
+            }
+        });
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) handleFiles(e.target.files);
+            fileInput.value = '';
+        });
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-indigo-500', 'bg-indigo-50/60');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('border-indigo-500', 'bg-indigo-50/60');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-indigo-500', 'bg-indigo-50/60');
+            if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files);
+        });
+
+        exportBtn.addEventListener('click', openExportModal);
+        exportModalClose.addEventListener('click', closeExportModal);
+        exportCancelBtn.addEventListener('click', closeExportModal);
+        exportConfirmBtn.addEventListener('click', () => exportPdf());
+
+        clearAllBtn.addEventListener('click', () => {
+            if (pageItems.length === 0) return;
+            pageItems = [];
+            fileCache = {};
+            pagesGrid.innerHTML = '';
+            updateUI();
+            showToast('すべてのページをクリアしました');
+        });
+
+        toolSizeInput.addEventListener('input', (e) => {
+            sizeDisplay.textContent = e.target.value;
+            if (selectedAnnotationId) {
+                const ann = annotationsList.find(a => a.id === selectedAnnotationId);
+                if (ann) {
+                    ann.size = parseInt(e.target.value, 10);
+                    renderAllAnnotations();
+                }
+            }
+        });
+
+        toolColorInput.addEventListener('input', (e) => {
+            if (selectedAnnotationId) {
+                const ann = annotationsList.find(a => a.id === selectedAnnotationId);
+                if (ann) {
+                    ann.color = e.target.value;
+                    renderAllAnnotations();
+                }
+            }
+        });
+
+        document.querySelectorAll('.tool-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active', 'bg-indigo-600', 'text-white'));
+                btn.classList.add('active', 'bg-indigo-600', 'text-white');
+                currentTool = btn.dataset.tool;
+                updateCanvasCursor();
+            });
+        });
+
+        function updateCanvasCursor() {
+            drawCanvas.className = 'absolute top-0 left-0 w-full h-full rounded ';
+            if (currentTool === 'pen' || currentTool === 'highlighter' || currentTool === 'rect' || currentTool === 'circle') drawCanvas.classList.add('cursor-pen');
+            else if (currentTool === 'text') drawCanvas.classList.add('cursor-text-tool');
+            else drawCanvas.classList.add('cursor-default');
+        }
+
+        document.getElementById('zoom-in-btn').addEventListener('click', () => adjustZoom(0.15));
+        document.getElementById('zoom-out-btn').addEventListener('click', () => adjustZoom(-0.15));
+        document.getElementById('zoom-fit-btn').addEventListener('click', () => fitCanvasToContainer());
+        document.getElementById('rotate-left-btn').addEventListener('click', () => rotateModalPage(-90));
+        document.getElementById('rotate-right-btn').addEventListener('click', () => rotateModalPage(90));
+        
+        document.getElementById('delete-selected-btn').addEventListener('click', deleteSelectedAnnotation);
+        document.getElementById('undo-annotation-btn').addEventListener('click', undoAnnotation);
+        document.getElementById('clear-annotation-btn').addEventListener('click', clearAnnotations);
+
+        window.addEventListener('keydown', (e) => {
+            if (!annotationModal.classList.contains('hidden') && selectedAnnotationId) {
+                if (e.key === 'Delete' || e.key === 'Backspace') {
+                    if (document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+                        deleteSelectedAnnotation();
+                    }
+                }
+            }
+        });
+
+        document.getElementById('modal-cancel-btn').addEventListener('click', closeAnnotationModal);
+        document.getElementById('modal-save-btn').addEventListener('click', saveAnnotationAndClose);
+
+        const generateId = () => Math.random().toString(36).substr(2, 9);
+
+        function showToast(message) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'bg-slate-800 text-white border border-slate-700 px-4 py-2.5 rounded-lg shadow-lg text-xs font-medium flex items-center gap-2 animate-fade-in pointer-events-auto';
+            toast.innerHTML = `<i data-lucide="info" class="w-4 h-4 text-indigo-400"></i><span>${message}</span>`;
+            container.appendChild(toast);
+            lucide.createIcons({ root: toast });
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function showLoading(text) {
+            loadingText.textContent = text;
+            loadingOverlay.classList.remove('hidden');
+            loadingOverlay.classList.add('flex');
+        }
+        function hideLoading() {
+            loadingOverlay.classList.add('hidden');
+            loadingOverlay.classList.remove('flex');
+        }
+
+        function updateUI() {
+            const dropZoneLarge = document.getElementById('drop-zone-large');
+            const dropZoneCompact = document.getElementById('drop-zone-compact');
+
+            if (pageItems.length > 0) {
+                emptyState.style.display = 'none';
+                exportBtn.disabled = false;
+
+                dropZone.classList.remove('p-5', 'sm:p-6');
+                dropZone.classList.add('py-2.5', 'px-4');
+                dropZoneLarge.classList.add('hidden');
+                dropZoneCompact.classList.remove('hidden');
+                dropZoneCompact.classList.add('flex');
+            } else {
+                emptyState.style.display = 'flex';
+                exportBtn.disabled = true;
+
+                dropZone.classList.remove('py-2.5', 'px-4');
+                dropZone.classList.add('p-5', 'sm:p-6');
+                dropZoneLarge.classList.remove('hidden');
+                dropZoneCompact.classList.add('hidden');
+                dropZoneCompact.classList.remove('flex');
+            }
+            updatePageNumbers();
+        }
+
+        function updatePageNumbers() {
+            const badges = pagesGrid.querySelectorAll('.page-number-badge');
+            badges.forEach((badge, index) => {
+                badge.textContent = index + 1;
+            });
+        }
+
+        async function handleFiles(files) {
+            showLoading('ファイルを読み込んで処理中...');
+            
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                try {
+                    if (file.type === 'application/pdf') {
+                        await processPdf(file);
+                    } else if (file.type.startsWith('image/')) {
+                        await processImage(file);
+                    } else {
+                        showToast(`${file.name} は対応外のファイル形式です`);
+                    }
+                } catch (error) {
+                    console.error('ファイルロードエラー:', error);
+                    showToast(`${file.name} の読み込みに失敗しました`);
+                }
+            }
+            
+            updateUI();
+            hideLoading();
+        }
+
+        async function processPdf(file) {
+            const fileId = generateId();
+            const arrayBuffer = await file.arrayBuffer();
+            
+            const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+            fileCache[fileId] = { type: 'pdf', file, pdfLibDoc: pdfDoc, arrayBuffer };
+
+            const pdfjsDoc = await pdfjsLib.getDocument({
+                data: arrayBuffer.slice(0),
+                cMapUrl: CMAP_URL,
+                cMapPacked: true,
+                standardFontDataUrl: STANDARD_FONT_URL
+            }).promise;
+            
+            for (let i = 1; i <= pdfjsDoc.numPages; i++) {
+                const page = await pdfjsDoc.getPage(i);
+                const viewport = page.getViewport({ scale: 1.5 });
+
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+
+                await page.render({ canvasContext: context, viewport }).promise;
+
+                const item = {
+                    id: generateId(),
+                    type: 'pdf',
+                    fileId: fileId,
+                    pageIndex: i - 1,
+                    previewUrl: canvas.toDataURL('image/png'),
+                    fileName: file.name,
+                    rotation: 0,
+                    annotationsObjects: [],
+                    annotations: null
+                };
+                
+                pageItems.push(item);
+                renderPageCard(item);
+            }
+        }
+
+        async function processImage(file) {
+            const fileId = generateId();
+            const arrayBuffer = await file.arrayBuffer();
+            
+            fileCache[fileId] = { type: 'image', file, arrayBuffer };
+
+            const previewUrl = URL.createObjectURL(file);
+            const item = {
+                id: generateId(),
+                type: 'image',
+                fileId: fileId,
+                imageMime: file.type,
+                previewUrl: previewUrl,
+                fileName: file.name,
+                rotation: 0,
+                annotationsObjects: [],
+                annotations: null
+            };
+
+            pageItems.push(item);
+            renderPageCard(item);
+        }
+
+        function renderPageCard(item) {
+            const div = document.createElement('div');
+            div.className = 'relative group bg-white p-2.5 rounded-xl border border-slate-200 hover:border-indigo-400 shadow-sm hover:shadow-md transition-all flex flex-col justify-between';
+            div.dataset.id = item.id;
+            
+            const imgContainer = document.createElement('div');
+            imgContainer.className = 'w-full h-44 flex items-center justify-center bg-slate-50 border border-slate-100 rounded-lg overflow-hidden mb-2 relative cursor-grab active:cursor-grabbing';
+            
+            const img = document.createElement('img');
+            img.src = item.previewUrl;
+            img.className = 'max-w-full max-h-full object-contain transition-transform duration-200';
+            img.style.transform = `rotate(${item.rotation}deg)`;
+            imgContainer.appendChild(img);
+
+            if (item.annotationsObjects && item.annotationsObjects.length > 0) {
+                const badge = document.createElement('span');
+                badge.className = 'absolute top-2 left-2 bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm';
+                badge.textContent = '注釈あり';
+                imgContainer.appendChild(badge);
+            }
+
+            const footerDiv = document.createElement('div');
+            footerDiv.className = 'flex items-center justify-between text-xs text-slate-500 mt-1 px-1';
+            
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'truncate max-w-[90px] font-medium';
+            nameSpan.title = item.fileName;
+            nameSpan.textContent = item.fileName;
+
+            const pageBadge = document.createElement('span');
+            pageBadge.className = 'page-number-badge font-mono font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded';
+            pageBadge.textContent = pageItems.length;
+
+            footerDiv.appendChild(nameSpan);
+            footerDiv.appendChild(pageBadge);
+
+            const actionOverlay = document.createElement('div');
+            actionOverlay.className = 'absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity rounded-xl flex items-center justify-center gap-2 p-2 backdrop-blur-xs';
+            
+            const editBtn = document.createElement('button');
+            editBtn.className = 'p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow transition';
+            editBtn.title = '注釈モード';
+            editBtn.innerHTML = '<i data-lucide="edit-3" class="w-4 h-4"></i>';
+            editBtn.onclick = (e) => {
+                e.stopPropagation();
+                openAnnotationModal(item);
+            };
+
+            const rotateBtn = document.createElement('button');
+            rotateBtn.className = 'p-2 bg-white hover:bg-slate-100 text-slate-800 rounded-lg shadow transition';
+            rotateBtn.title = '右90度回転';
+            rotateBtn.innerHTML = '<i data-lucide="rotate-cw" class="w-4 h-4"></i>';
+            rotateBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (item.annotationsObjects && item.annotationsObjects.length > 0) {
+                    const tempImg = new Image();
+                    tempImg.onload = () => {
+                        const rot = ((item.rotation % 360) + 360) % 360;
+                        const isVert = (rot === 90 || rot === 270);
+                        const W = isVert ? tempImg.height : tempImg.width;
+                        const H = isVert ? tempImg.width : tempImg.height;
+                        rotateAnnotationsClockwiseArray(item.annotationsObjects, W, H);
+                        item.rotation = (item.rotation + 90) % 360;
+                        img.style.transform = `rotate(${item.rotation}deg)`;
+                    };
+                    tempImg.src = item.previewUrl;
+                } else {
+                    item.rotation = (item.rotation + 90) % 360;
+                    img.style.transform = `rotate(${item.rotation}deg)`;
+                }
+            };
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'p-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow transition';
+            deleteBtn.title = 'ページ削除';
+            deleteBtn.innerHTML = '<i data-lucide="trash-2" class="w-4 h-4"></i>';
+            deleteBtn.onclick = (e) => {
+                e.stopPropagation();
+                deletePage(item.id, div);
+            };
+
+            actionOverlay.appendChild(editBtn);
+            actionOverlay.appendChild(rotateBtn);
+            actionOverlay.appendChild(deleteBtn);
+
+            div.appendChild(imgContainer);
+            div.appendChild(footerDiv);
+            div.appendChild(actionOverlay);
+            
+            pagesGrid.appendChild(div);
+            lucide.createIcons({ root: div });
+        }
+
+        function deletePage(id, element) {
+            pageItems = pageItems.filter(item => item.id !== id);
+            element.remove();
+            updateUI();
+        }
+
+        async function openAnnotationModal(item) {
+            currentModalItem = item;
+            currentRotation = item.rotation || 0;
+            
+            annotationsList = item.annotationsObjects ? JSON.parse(JSON.stringify(item.annotationsObjects)) : [];
+            selectedAnnotationId = null;
+            saveHistoryState();
+
+            showLoading('編集画面を初期化中...');
+
+            const img = new Image();
+            img.onload = () => {
+                currentModalImage = img;
+                reloadModalCanvas();
+
+                const pageIdx = pageItems.findIndex(p => p.id === item.id) + 1;
+                document.getElementById('modal-page-info').textContent = `Page ${pageIdx} / ${pageItems.length}`;
+
+                hideLoading();
+                annotationModal.classList.remove('hidden');
+                annotationModal.classList.add('flex');
+
+                fitCanvasToContainer();
+            };
+            img.src = item.previewUrl;
+        }
+
+        function reloadModalCanvas() {
+            if (!currentModalImage) return;
+
+            const img = currentModalImage;
+            const rot = ((currentRotation % 360) + 360) % 360;
+            const isVertical = (rot === 90 || rot === 270);
+
+            const canvasW = isVertical ? img.height : img.width;
+            const canvasH = isVertical ? img.width : img.height;
+
+            baseCanvas.width = canvasW;
+            baseCanvas.height = canvasH;
+            drawCanvas.width = canvasW;
+            drawCanvas.height = canvasH;
+
+            baseCtx.clearRect(0, 0, canvasW, canvasH);
+            baseCtx.save();
+            baseCtx.translate(canvasW / 2, canvasH / 2);
+            baseCtx.rotate((rot * Math.PI) / 180);
+            baseCtx.drawImage(img, -img.width / 2, -img.height / 2);
+            baseCtx.restore();
+
+            renderAllAnnotations();
+        }
+
+        function fitCanvasToContainer() {
+            if (!baseCanvas.width) return;
+
+            const containerWidth = scrollContainer.clientWidth - 64;
+            const containerHeight = scrollContainer.clientHeight - 64;
+
+            const scaleX = containerWidth / baseCanvas.width;
+            const scaleY = containerHeight / baseCanvas.height;
+
+            currentScale = Math.min(scaleX, scaleY, 1.2);
+            if (currentScale < 0.2) currentScale = 0.2;
+
+            isFitMode = true;
+            applyCanvasTransform();
+        }
+
+        function adjustZoom(delta) {
+            isFitMode = false;
+            currentScale = Math.max(0.15, Math.min(3.0, currentScale + delta));
+            applyCanvasTransform();
+        }
+
+        function applyCanvasTransform() {
+            zoomPercent.textContent = isFitMode ? 'Fit' : `${Math.round(currentScale * 100)}%`;
+
+            const w = baseCanvas.width * currentScale;
+            const h = baseCanvas.height * currentScale;
+
+            canvasWrapper.style.width = `${w}px`;
+            canvasWrapper.style.height = `${h}px`;
+            canvasWrapper.style.transform = 'none';
+
+            canvasWrapperContainer.style.width = `${w}px`;
+            canvasWrapperContainer.style.height = `${h}px`;
+
+            setTimeout(() => {
+                scrollContainer.scrollTop = (scrollContainer.scrollHeight - scrollContainer.clientHeight) / 2;
+                scrollContainer.scrollLeft = (scrollContainer.scrollWidth - scrollContainer.clientWidth) / 2;
+            }, 10);
+        }
+
+        function rotateModalPage(deg) {
+            const oldW = baseCanvas.width;
+            const oldH = baseCanvas.height;
+
+            if (deg === 90 || deg === -270) {
+                rotateAnnotationsClockwise(oldW, oldH);
+            } else if (deg === -90 || deg === 270) {
+                rotateAnnotationsCounterClockwise(oldW, oldH);
+            }
+
+            currentRotation = (currentRotation + deg + 360) % 360;
+            reloadModalCanvas();
+            applyCanvasTransform();
+        }
+
+        function rotateAnnotationsClockwise(W, H) {
+            rotateAnnotationsClockwiseArray(annotationsList, W, H);
+            saveHistoryState();
+        }
+
+        function rotateAnnotationsClockwiseArray(list, W, H) {
+            list.forEach(ann => {
+                if (ann.type === 'pen' || ann.type === 'highlighter') {
+                    ann.points.forEach(p => {
+                        const nx = H - p.y;
+                        const ny = p.x;
+                        p.x = nx;
+                        p.y = ny;
+                    });
+                } else if (ann.type === 'rect' || ann.type === 'circle') {
+                    const minX = Math.min(ann.x, ann.x + ann.width);
+                    const minY = Math.min(ann.y, ann.y + ann.height);
+                    const w = Math.abs(ann.width);
+                    const h = Math.abs(ann.height);
+                    ann.x = H - (minY + h);
+                    ann.y = minX;
+                    ann.width = h;
+                    ann.height = w;
+                } else if (ann.type === 'text') {
+                    const nx = H - ann.y;
+                    const ny = ann.x;
+                    ann.x = nx;
+                    ann.y = ny;
+                }
+            });
+        }
+
+        function rotateAnnotationsCounterClockwise(W, H) {
+            rotateAnnotationsCounterClockwiseArray(annotationsList, W, H);
+            saveHistoryState();
+        }
+
+        function rotateAnnotationsCounterClockwiseArray(list, W, H) {
+            list.forEach(ann => {
+                if (ann.type === 'pen' || ann.type === 'highlighter') {
+                    ann.points.forEach(p => {
+                        const nx = p.y;
+                        const ny = W - p.x;
+                        p.x = nx;
+                        p.y = ny;
+                    });
+                } else if (ann.type === 'rect' || ann.type === 'circle') {
+                    const minX = Math.min(ann.x, ann.x + ann.width);
+                    const minY = Math.min(ann.y, ann.y + ann.height);
+                    const w = Math.abs(ann.width);
+                    const h = Math.abs(ann.height);
+                    ann.x = minY;
+                    ann.y = W - (minX + w);
+                    ann.width = h;
+                    ann.height = w;
+                } else if (ann.type === 'text') {
+                    const nx = ann.y;
+                    const ny = W - ann.x;
+                    ann.x = nx;
+                    ann.y = ny;
+                }
+            });
+        }
+
+        function getCanvasCoordinates(e) {
+            const rect = drawCanvas.getBoundingClientRect();
+            if (!rect.width || !rect.height) return { x: 0, y: 0 };
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            let xRel = (clientX - rect.left) / rect.width;
+            let yRel = (clientY - rect.top) / rect.height;
+
+            xRel = Math.max(0, Math.min(1, xRel));
+            yRel = Math.max(0, Math.min(1, yRel));
+
+            return {
+                x: xRel * drawCanvas.width,
+                y: yRel * drawCanvas.height
+            };
+        }
+
+        function getAnnotationBBox(ann) {
+            if (ann.type === 'rect' || ann.type === 'circle') {
+                const x = Math.min(ann.x, ann.x + ann.width);
+                const y = Math.min(ann.y, ann.y + ann.height);
+                const w = Math.abs(ann.width);
+                const h = Math.abs(ann.height);
+                return { x, y, w, h };
+            } else if (ann.type === 'text') {
+                const fontSize = ann.size * 5 + 12;
+                drawCtx.font = `bold ${fontSize}px sans-serif`;
+                const metrics = drawCtx.measureText(ann.text || '');
+                const w = metrics.width || 50;
+                const h = fontSize * 1.2;
+                return { x: ann.x, y: ann.y - fontSize, w, h };
+            } else if (ann.type === 'pen' || ann.type === 'highlighter') {
+                if (!ann.points || ann.points.length === 0) return { x: 0, y: 0, w: 0, h: 0 };
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                ann.points.forEach(p => {
+                    if (p.x < minX) minX = p.x;
+                    if (p.y < minY) minY = p.y;
+                    if (p.x > maxX) maxX = p.x;
+                    if (p.y > maxY) maxY = p.y;
+                });
+                const pad = (ann.type === 'highlighter' ? ann.size * 3 : ann.size) + 4;
+                return { x: minX - pad, y: minY - pad, w: (maxX - minX) + pad * 2, h: (maxY - minY) + pad * 2 };
+            }
+            return { x: 0, y: 0, w: 0, h: 0 };
+        }
+
+        function hitTestHandles(coords, bbox) {
+            const handleSize = 14 / currentScale;
+            const handles = {
+                'resize-nw': { x: bbox.x, y: bbox.y },
+                'resize-ne': { x: bbox.x + bbox.w, y: bbox.y },
+                'resize-se': { x: bbox.x + bbox.w, y: bbox.y + bbox.h },
+                'resize-sw': { x: bbox.x, y: bbox.y + bbox.h }
+            };
+
+            for (const [handleType, pos] of Object.entries(handles)) {
+                if (Math.abs(coords.x - pos.x) <= handleSize && Math.abs(coords.y - pos.y) <= handleSize) {
+                    return handleType;
+                }
+            }
+            return null;
+        }
+
+        function hitTestAnnotations(coords) {
+            if (selectedAnnotationId) {
+                const selAnn = annotationsList.find(a => a.id === selectedAnnotationId);
+                if (selAnn) {
+                    const bbox = getAnnotationBBox(selAnn);
+                    const handleHit = hitTestHandles(coords, bbox);
+                    if (handleHit) return { annotation: selAnn, handle: handleHit };
+                }
+            }
+
+            for (let i = annotationsList.length - 1; i >= 0; i--) {
+                const ann = annotationsList[i];
+                const bbox = getAnnotationBBox(ann);
+                if (coords.x >= bbox.x && coords.x <= bbox.x + bbox.w &&
+                    coords.y >= bbox.y && coords.y <= bbox.y + bbox.h) {
+                    return { annotation: ann, handle: 'move' };
+                }
+            }
+
+            return null;
+        }
+
+        function renderAllAnnotations() {
+            drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+
+            annotationsList.forEach(ann => {
+                drawCtx.save();
+                if (ann.type === 'pen') {
+                    drawCtx.beginPath();
+                    drawCtx.strokeStyle = ann.color;
+                    drawCtx.lineWidth = ann.size * 2;
+                    drawCtx.lineCap = 'round';
+                    drawCtx.lineJoin = 'round';
+                    drawCtx.globalAlpha = 1.0;
+                    ann.points.forEach((p, idx) => {
+                        if (idx === 0) drawCtx.moveTo(p.x, p.y);
+                        else drawCtx.lineTo(p.x, p.y);
+                    });
+                    drawCtx.stroke();
+                } else if (ann.type === 'highlighter') {
+                    drawCtx.beginPath();
+                    drawCtx.strokeStyle = ann.color;
+                    drawCtx.lineWidth = ann.size * 6;
+                    drawCtx.lineCap = 'round';
+                    drawCtx.lineJoin = 'round';
+                    drawCtx.globalAlpha = 0.35;
+                    ann.points.forEach((p, idx) => {
+                        if (idx === 0) drawCtx.moveTo(p.x, p.y);
+                        else drawCtx.lineTo(p.x, p.y);
+                    });
+                    drawCtx.stroke();
+                } else if (ann.type === 'rect') {
+                    drawCtx.beginPath();
+                    drawCtx.strokeStyle = ann.color;
+                    drawCtx.lineWidth = ann.size * 2;
+                    drawCtx.globalAlpha = 1.0;
+                    drawCtx.strokeRect(ann.x, ann.y, ann.width, ann.height);
+                } else if (ann.type === 'circle') {
+                    drawCtx.beginPath();
+                    drawCtx.strokeStyle = ann.color;
+                    drawCtx.lineWidth = ann.size * 2;
+                    drawCtx.globalAlpha = 1.0;
+                    const rx = Math.abs(ann.width / 2);
+                    const ry = Math.abs(ann.height / 2);
+                    const cx = ann.x + ann.width / 2;
+                    const cy = ann.y + ann.height / 2;
+                    if (rx > 0 && ry > 0) {
+                        drawCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+                        drawCtx.stroke();
+                    }
+                } else if (ann.type === 'text') {
+                    const fontSize = ann.size * 5 + 12;
+                    drawCtx.font = `bold ${fontSize}px sans-serif`;
+                    drawCtx.fillStyle = ann.color;
+                    drawCtx.globalAlpha = 1.0;
+                    drawCtx.fillText(ann.text || '', ann.x, ann.y);
+                }
+                drawCtx.restore();
+            });
+
+            if (selectedAnnotationId) {
+                const selAnn = annotationsList.find(a => a.id === selectedAnnotationId);
+                if (selAnn) {
+                    const bbox = getAnnotationBBox(selAnn);
+                    drawCtx.save();
+                    drawCtx.strokeStyle = '#3b82f6';
+                    drawCtx.lineWidth = 2 / currentScale;
+                    drawCtx.setLineDash([6 / currentScale, 4 / currentScale]);
+                    drawCtx.strokeRect(bbox.x, bbox.y, bbox.w, bbox.h);
+
+                    drawCtx.setLineDash([]);
+                    drawCtx.fillStyle = '#ffffff';
+                    const handleSize = 8 / currentScale;
+                    const handles = [
+                        { x: bbox.x, y: bbox.y },
+                        { x: bbox.x + bbox.w, y: bbox.y },
+                        { x: bbox.x + bbox.w, y: bbox.y + bbox.h },
+                        { x: bbox.x, y: bbox.y + bbox.h }
+                    ];
+                    handles.forEach(h => {
+                        drawCtx.beginPath();
+                        drawCtx.arc(h.x, h.y, handleSize / 2, 0, Math.PI * 2);
+                        drawCtx.fill();
+                        drawCtx.stroke();
+                    });
+
+                    drawCtx.restore();
+                }
+            }
+        }
+
+        function startDrawing(e) {
+            const coords = getCanvasCoordinates(e);
+            startCoords = coords;
+            isInteracting = true;
+
+            if (currentTool === 'select') {
+                const hit = hitTestAnnotations(coords);
+                if (hit) {
+                    selectedAnnotationId = hit.annotation.id;
+                    interactionType = hit.handle;
+                    activeAnnotation = hit.annotation;
+                    
+                    initialObjectState = JSON.parse(JSON.stringify(hit.annotation));
+                    dragOffset = { x: coords.x - hit.annotation.x, y: coords.y - hit.annotation.y };
+
+                    if (hit.annotation.color) toolColorInput.value = hit.annotation.color;
+                    if (hit.annotation.size) {
+                        toolSizeInput.value = hit.annotation.size;
+                        sizeDisplay.textContent = hit.annotation.size;
+                    }
+                } else {
+                    selectedAnnotationId = null;
+                    interactionType = null;
+                    activeAnnotation = null;
+                }
+                renderAllAnnotations();
+                return;
+            }
+
+            selectedAnnotationId = null;
+
+            if (currentTool === 'pen' || currentTool === 'highlighter') {
+                interactionType = 'draw';
+                activeAnnotation = {
+                    id: generateId(),
+                    type: currentTool,
+                    color: toolColorInput.value,
+                    size: parseInt(toolSizeInput.value, 10),
+                    points: [{ x: coords.x, y: coords.y }]
+                };
+                annotationsList.push(activeAnnotation);
+            } else if (currentTool === 'rect' || currentTool === 'circle') {
+                interactionType = 'draw';
+                activeAnnotation = {
+                    id: generateId(),
+                    type: currentTool,
+                    color: toolColorInput.value,
+                    size: parseInt(toolSizeInput.value, 10),
+                    x: coords.x,
+                    y: coords.y,
+                    width: 0,
+                    height: 0
+                };
+                annotationsList.push(activeAnnotation);
+            } else if (currentTool === 'text') {
+                isInteracting = false;
+                addTextToCanvas(coords);
+            }
+            renderAllAnnotations();
+        }
+
+        function drawMove(e) {
+            if (!isInteracting || !activeAnnotation) return;
+            e.preventDefault();
+
+            const coords = getCanvasCoordinates(e);
+
+            if (currentTool === 'select') {
+                if (interactionType === 'move') {
+                    const dx = coords.x - startCoords.x;
+                    const dy = coords.y - startCoords.y;
+
+                    if (activeAnnotation.type === 'rect' || activeAnnotation.type === 'circle' || activeAnnotation.type === 'text') {
+                        activeAnnotation.x = initialObjectState.x + dx;
+                        activeAnnotation.y = initialObjectState.y + dy;
+                    } else if (activeAnnotation.type === 'pen' || activeAnnotation.type === 'highlighter') {
+                        activeAnnotation.points = initialObjectState.points.map(p => ({
+                            x: p.x + dx,
+                            y: p.y + dy
+                        }));
+                    }
+                } else if (interactionType && interactionType.startsWith('resize')) {
+                    const dx = coords.x - startCoords.x;
+                    const dy = coords.y - startCoords.y;
+
+                    if (activeAnnotation.type === 'rect' || activeAnnotation.type === 'circle') {
+                        if (interactionType === 'resize-se') {
+                            activeAnnotation.width = initialObjectState.width + dx;
+                            activeAnnotation.height = initialObjectState.height + dy;
+                        } else if (interactionType === 'resize-sw') {
+                            activeAnnotation.x = initialObjectState.x + dx;
+                            activeAnnotation.width = initialObjectState.width - dx;
+                            activeAnnotation.height = initialObjectState.height + dy;
+                        } else if (interactionType === 'resize-ne') {
+                            activeAnnotation.y = initialObjectState.y + dy;
+                            activeAnnotation.width = initialObjectState.width + dx;
+                            activeAnnotation.height = initialObjectState.height - dy;
+                        } else if (interactionType === 'resize-nw') {
+                            activeAnnotation.x = initialObjectState.x + dx;
+                            activeAnnotation.y = initialObjectState.y + dy;
+                            activeAnnotation.width = initialObjectState.width - dx;
+                            activeAnnotation.height = initialObjectState.height - dy;
+                        }
+                    } else if (activeAnnotation.type === 'text' || activeAnnotation.type === 'pen' || activeAnnotation.type === 'highlighter') {
+                        const scaleFactor = 1 + (dx + dy) / 200;
+                        const newSize = Math.max(2, Math.min(60, Math.round(initialObjectState.size * scaleFactor)));
+                        activeAnnotation.size = newSize;
+                        toolSizeInput.value = newSize;
+                        sizeDisplay.textContent = newSize;
+                    }
+                }
+            } else if (interactionType === 'draw') {
+                if (activeAnnotation.type === 'pen' || activeAnnotation.type === 'highlighter') {
+                    activeAnnotation.points.push({ x: coords.x, y: coords.y });
+                } else if (activeAnnotation.type === 'rect' || activeAnnotation.type === 'circle') {
+                    activeAnnotation.width = coords.x - startCoords.x;
+                    activeAnnotation.height = coords.y - startCoords.y;
+                }
+            }
+
+            renderAllAnnotations();
+        }
+
+        function stopDrawing() {
+            if (!isInteracting) return;
+            isInteracting = false;
+            interactionType = null;
+            activeAnnotation = null;
+            saveHistoryState();
+            renderAllAnnotations();
+        }
+
+        function addTextToCanvas(coords) {
+            const text = prompt('挿入するテキストを入力してください:', '');
+            if (!text) return;
+
+            const newTextAnn = {
+                id: generateId(),
+                type: 'text',
+                color: toolColorInput.value,
+                size: parseInt(toolSizeInput.value, 10),
+                text: text,
+                x: coords.x,
+                y: coords.y
+            };
+
+            annotationsList.push(newTextAnn);
+            selectedAnnotationId = newTextAnn.id;
+            saveHistoryState();
+            renderAllAnnotations();
+        }
+
+        drawCanvas.addEventListener('dblclick', (e) => {
+            if (currentTool !== 'select') return;
+            const coords = getCanvasCoordinates(e);
+            const hit = hitTestAnnotations(coords);
+
+            if (hit && hit.annotation.type === 'text') {
+                const newText = prompt('テキストの内容を変更:', hit.annotation.text);
+                if (newText !== null && newText.trim() !== '') {
+                    hit.annotation.text = newText;
+                    saveHistoryState();
+                    renderAllAnnotations();
+                }
+            }
+        });
+
+        function deleteSelectedAnnotation() {
+            if (!selectedAnnotationId) return;
+            annotationsList = annotationsList.filter(a => a.id !== selectedAnnotationId);
+            selectedAnnotationId = null;
+            saveHistoryState();
+            renderAllAnnotations();
+            showToast('オブジェクトを削除しました');
+        }
+
+        function saveHistoryState() {
+            if (annotationHistory.length > 25) annotationHistory.shift();
+            annotationHistory.push(JSON.stringify(annotationsList));
+        }
+
+        function undoAnnotation() {
+            if (annotationHistory.length > 1) {
+                annotationHistory.pop();
+                const lastState = annotationHistory[annotationHistory.length - 1];
+                annotationsList = JSON.parse(lastState);
+                selectedAnnotationId = null;
+                renderAllAnnotations();
+            } else if (annotationHistory.length === 1) {
+                annotationsList = [];
+                selectedAnnotationId = null;
+                renderAllAnnotations();
+            }
+        }
+
+        function clearAnnotations() {
+            if (annotationsList.length === 0) return;
+            annotationsList = [];
+            selectedAnnotationId = null;
+            saveHistoryState();
+            renderAllAnnotations();
+            showToast('すべての注釈を消去しました');
+        }
+
+        drawCanvas.addEventListener('mousedown', startDrawing);
+        drawCanvas.addEventListener('mousemove', drawMove);
+        window.addEventListener('mouseup', stopDrawing);
+
+        drawCanvas.addEventListener('touchstart', startDrawing, { passive: false });
+        drawCanvas.addEventListener('touchmove', drawMove, { passive: false });
+        window.addEventListener('touchend', stopDrawing);
+
+        function saveAnnotationAndClose() {
+            if (!currentModalItem) return;
+
+            currentModalItem.rotation = currentRotation;
+            currentModalItem.annotationsObjects = JSON.parse(JSON.stringify(annotationsList));
+
+            selectedAnnotationId = null;
+            renderAllAnnotations();
+
+            const hasContent = annotationsList.length > 0;
+            if (hasContent) {
+                currentModalItem.annotations = drawCanvas.toDataURL('image/png');
+            } else {
+                currentModalItem.annotations = null;
+            }
+
+            const cardEl = pagesGrid.querySelector(`[data-id="${currentModalItem.id}"]`);
+            if (cardEl) {
+                const img = cardEl.querySelector('img');
+                if (img) img.style.transform = `rotate(${currentRotation}deg)`;
+                
+                let badge = cardEl.querySelector('.bg-indigo-600');
+                if (hasContent && !badge) {
+                    badge = document.createElement('span');
+                    badge.className = 'absolute top-2 left-2 bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm';
+                    badge.textContent = '注釈あり';
+                    cardEl.querySelector('.relative').appendChild(badge);
+                } else if (!hasContent && badge) {
+                    badge.remove();
+                }
+            }
+
+            closeAnnotationModal();
+            showToast('注釈内容を更新しました');
+        }
+
+        function closeAnnotationModal() {
+            annotationModal.classList.add('hidden');
+            annotationModal.classList.remove('flex');
+            currentModalItem = null;
+            selectedAnnotationId = null;
+        }
+
+        function getDefaultFileName() {
+            const now = new Date();
+            const yy = String(now.getFullYear()).slice(-2);
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            const hh = String(now.getHours()).padStart(2, '0');
+            const min = String(now.getMinutes()).padStart(2, '0');
+            return `PDFまとめ_${yy}${mm}${dd}_${hh}${min}`;
+        }
+
+        function openExportModal() {
+            if (pageItems.length === 0) return;
+            exportFilenameInput.value = getDefaultFileName();
+            exportModal.classList.remove('hidden');
+            exportModal.classList.add('flex');
+            exportFilenameInput.focus();
+            exportFilenameInput.select();
+        }
+
+        function closeExportModal() {
+            exportModal.classList.add('hidden');
+            exportModal.classList.remove('flex');
+        }
+
+        // --- PDF最終エクスポート処理 (回転＆注釈の一括Canvas焼き込み合成により向きズレ・文字消えを完全に防止) ---
+        async function exportPdf() {
+            if (pageItems.length === 0) return;
+
+            let filename = exportFilenameInput.value.trim() || getDefaultFileName();
+            if (!filename.toLowerCase().endsWith('.pdf')) {
+                filename += '.pdf';
+            }
+
+            const qualitySetting = document.querySelector('input[name="export-quality"]:checked')?.value || 'medium';
+            
+            let renderScale = 1.5;
+            let imageQuality = 0.75;
+            
+            if (qualitySetting === 'high') {
+                renderScale = 2.0;
+                imageQuality = 0.95;
+            } else if (qualitySetting === 'low') {
+                renderScale = 1.0;
+                imageQuality = 0.50;
+            }
+
+            closeExportModal();
+            showLoading('新しいPDF文書を作成・結合中...');
+            
+            try {
+                const { PDFDocument } = PDFLib;
+                const newPdf = await PDFDocument.create();
+
+                for (const item of pageItems) {
+                    const rot = ((item.rotation % 360) + 360) % 360;
+                    const isVertical = (rot === 90 || rot === 270);
+
+                    const finalCanvas = document.createElement('canvas');
+                    const finalCtx = finalCanvas.getContext('2d');
+
+                    let baseW = 0;
+                    let baseH = 0;
+                    let sourceImage = null;
+
+                    if (item.type === 'pdf') {
+                        const srcBuffer = fileCache[item.fileId].arrayBuffer;
+                        const pdfjsDoc = await pdfjsLib.getDocument({
+                            data: srcBuffer.slice(0),
+                            cMapUrl: CMAP_URL,
+                            cMapPacked: true,
+                            standardFontDataUrl: STANDARD_FONT_URL
+                        }).promise;
+                        const pdfPage = await pdfjsDoc.getPage(item.pageIndex + 1);
+                        const viewport = pdfPage.getViewport({ scale: renderScale });
+
+                        const unrotatedW = viewport.width;
+                        const unrotatedH = viewport.height;
+
+                        const tempCanvas = document.createElement('canvas');
+                        tempCanvas.width = unrotatedW;
+                        tempCanvas.height = unrotatedH;
+                        await pdfPage.render({ canvasContext: tempCanvas.getContext('2d'), viewport }).promise;
+
+                        baseW = unrotatedW;
+                        baseH = unrotatedH;
+                        sourceImage = tempCanvas;
+                    } else {
+                        const img = new Image();
+                        await new Promise((resolve) => {
+                            img.onload = resolve;
+                            img.src = item.previewUrl;
+                        });
+                        baseW = img.width * (renderScale / 1.5);
+                        baseH = img.height * (renderScale / 1.5);
+                        sourceImage = img;
+                    }
+
+                    finalCanvas.width = isVertical ? baseH : baseW;
+                    finalCanvas.height = isVertical ? baseW : baseH;
+
+                    // 1. ベース画像を回転角付きで描画
+                    finalCtx.save();
+                    finalCtx.translate(finalCanvas.width / 2, finalCanvas.height / 2);
+                    finalCtx.rotate((rot * Math.PI) / 180);
+                    finalCtx.drawImage(sourceImage, -baseW / 2, -baseH / 2, baseW, baseH);
+                    finalCtx.restore();
+
+                    // 2. 注釈オブジェクトを直接焼き込み合成 (座標変換の重複を除去)
+                    if (item.annotationsObjects && item.annotationsObjects.length > 0) {
+                        const scaleUp = renderScale / 1.5;
+
+                        finalCtx.save();
+                        finalCtx.scale(scaleUp, scaleUp);
+
+                        item.annotationsObjects.forEach(ann => {
+                            finalCtx.save();
+                            if (ann.type === 'pen') {
+                                finalCtx.beginPath();
+                                finalCtx.strokeStyle = ann.color;
+                                finalCtx.lineWidth = ann.size * 2;
+                                finalCtx.lineCap = 'round';
+                                finalCtx.lineJoin = 'round';
+                                finalCtx.globalAlpha = 1.0;
+                                ann.points.forEach((p, idx) => {
+                                    if (idx === 0) finalCtx.moveTo(p.x, p.y);
+                                    else finalCtx.lineTo(p.x, p.y);
+                                });
+                                finalCtx.stroke();
+                            } else if (ann.type === 'highlighter') {
+                                finalCtx.beginPath();
+                                finalCtx.strokeStyle = ann.color;
+                                finalCtx.lineWidth = ann.size * 6;
+                                finalCtx.lineCap = 'round';
+                                finalCtx.lineJoin = 'round';
+                                finalCtx.globalAlpha = 0.35;
+                                ann.points.forEach((p, idx) => {
+                                    if (idx === 0) finalCtx.moveTo(p.x, p.y);
+                                    else finalCtx.lineTo(p.x, p.y);
+                                });
+                                finalCtx.stroke();
+                            } else if (ann.type === 'rect') {
+                                finalCtx.beginPath();
+                                finalCtx.strokeStyle = ann.color;
+                                finalCtx.lineWidth = ann.size * 2;
+                                finalCtx.globalAlpha = 1.0;
+                                finalCtx.strokeRect(ann.x, ann.y, ann.width, ann.height);
+                            } else if (ann.type === 'circle') {
+                                finalCtx.beginPath();
+                                finalCtx.strokeStyle = ann.color;
+                                finalCtx.lineWidth = ann.size * 2;
+                                finalCtx.globalAlpha = 1.0;
+                                const rx = Math.abs(ann.width / 2);
+                                const ry = Math.abs(ann.height / 2);
+                                const cx = ann.x + ann.width / 2;
+                                const cy = ann.y + ann.height / 2;
+                                if (rx > 0 && ry > 0) {
+                                    finalCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+                                    finalCtx.stroke();
+                                }
+                            } else if (ann.type === 'text') {
+                                const fontSize = ann.size * 5 + 12;
+                                finalCtx.font = `bold ${fontSize}px sans-serif`;
+                                finalCtx.fillStyle = ann.color;
+                                finalCtx.globalAlpha = 1.0;
+                                finalCtx.fillText(ann.text || '', ann.x, ann.y);
+                            }
+                            finalCtx.restore();
+                        });
+                        finalCtx.restore();
+                    }
+
+                    const pageJpgBytes = await new Promise((resolve) => {
+                        finalCanvas.toBlob(blob => blob.arrayBuffer().then(resolve), 'image/jpeg', imageQuality);
+                    });
+
+                    const embedImg = await newPdf.embedJpg(pageJpgBytes);
+                    const page = newPdf.addPage([embedImg.width, embedImg.height]);
+                    page.drawImage(embedImg, {
+                        x: 0,
+                        y: 0,
+                        width: embedImg.width,
+                        height: embedImg.height,
+                    });
+                }
+
+                const pdfBytes = await newPdf.save();
+
+                if ('showSaveFilePicker' in window) {
+                    try {
+                        const handle = await window.showSaveFilePicker({
+                            suggestedName: filename,
+                            types: [{
+                                description: 'PDF Documents',
+                                accept: { 'application/pdf': ['.pdf'] },
+                            }],
+                        });
+                        hideLoading();
+                        const writable = await handle.createWritable();
+                        await writable.write(pdfBytes);
+                        await writable.close();
+                        showToast('PDFファイルの保存が完了しました！');
+                        return;
+                    } catch (err) {
+                        if (err.name === 'AbortError') {
+                            hideLoading();
+                            return;
+                        }
+                    }
+                }
+
+                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                const file = new File([blob], filename, { type: 'application/pdf' });
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                    try {
+                        hideLoading();
+                        await navigator.share({
+                            files: [file],
+                            title: filename,
+                        });
+                        showToast('PDFファイルを共有・保存しました！');
+                        return;
+                    } catch (err) {
+                        if (err.name === 'AbortError') {
+                            hideLoading();
+                            return;
+                        }
+                    }
+                }
+
+                hideLoading();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                showToast('PDFファイルの作成が完了しました！');
+
+            } catch (error) {
+                console.error('PDF出力エラー:', error);
+                showToast('PDFの生成中にエラーが発生しました');
+            } finally {
+                hideLoading();
+            }
+        }
+    </script>
+</body>
+</html>
